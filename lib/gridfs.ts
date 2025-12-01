@@ -28,12 +28,18 @@ export async function uploadFile(buffer: Buffer, filename: string, mimetype: str
             size: buffer.length,
         },
     });
+
     return new Promise((resolve, reject) => {
-        const readSteam = Readable.from(buffer);
-        readSteam.pipe(uploadStream);
+        const readStream = Readable.from(buffer);
+        readStream.pipe(uploadStream);
 
         uploadStream.on("error", err => {
             reject(err);
+        });
+
+        // ✅ FIX: Resolve the promise when upload finishes
+        uploadStream.on("finish", () => {
+            resolve(uploadStream.id);
         });
     });
 }

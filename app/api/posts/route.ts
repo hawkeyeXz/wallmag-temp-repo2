@@ -9,13 +9,7 @@ import {
     validateFile,
 } from "@/lib/gridfs";
 import { dbConnect } from "@/lib/mongoose";
-import {
-    validateCategory,
-    validatePostTitle,
-    validateRawContent,
-    validateSubmissionType,
-    validateTags,
-} from "@/lib/security/validators";
+import { validatePostTitle, validateRawContent, validateSubmissionType } from "@/lib/security/validators";
 import { NextResponse } from "next/server";
 
 // -------------------- GET: Fetch Posts --------------------
@@ -82,21 +76,14 @@ export async function POST(req: Request) {
         const formData = await req.formData();
 
         const title = formData.get("title") as string;
-        const category = formData.get("category") as string;
+
         const submission_type = formData.get("submission_type") as string;
         const raw_content = formData.get("raw_content") as string;
-        const tagsString = formData.get("tags") as string;
 
         // Validate title
         const titleValidation = validatePostTitle(title);
         if (!titleValidation.valid) {
             return NextResponse.json({ field: "title", message: titleValidation.error }, { status: 400 });
-        }
-
-        // Validate category
-        const categoryValidation = validateCategory(category);
-        if (!categoryValidation.valid) {
-            return NextResponse.json({ field: "category", message: categoryValidation.error }, { status: 400 });
         }
 
         // Validate submission type
@@ -108,19 +95,11 @@ export async function POST(req: Request) {
             );
         }
 
-        // Validate tags
-        const tagsValidation = validateTags(tagsString || "");
-        if (!tagsValidation.valid) {
-            return NextResponse.json({ field: "tags", message: tagsValidation.error }, { status: 400 });
-        }
-
-        const tags = tagsValidation.sanitized ? tagsValidation.sanitized.split(",") : [];
-
         const postData: any = {
             title: titleValidation.sanitized,
-            category,
+
             submission_type,
-            tags,
+
             author: profile._id,
             author_name: profile.name,
             author_email: profile.email || user.email,

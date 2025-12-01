@@ -5,12 +5,10 @@ import type React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ProtectedRoute, useAuth } from "@/contexts/AuthContext";
 import { AlertCircle, FileText, ImageIcon, Loader2, Upload } from "lucide-react";
 import { useState } from "react";
-import { flushSync } from "react-dom";
 import { toast } from "sonner";
 
 export default function ContributePage() {
@@ -27,8 +25,7 @@ function ContributeForm() {
     const [loading, setLoading] = useState(false);
     const [formData, setFormData] = useState({
         title: "",
-        category: "article",
-        tags: "",
+
         raw_content: "",
     });
     const [file, setFile] = useState<File | null>(null);
@@ -41,9 +38,8 @@ function ContributeForm() {
         try {
             const data = new FormData();
             data.append("title", formData.title);
-            data.append("category", formData.category);
+
             data.append("submission_type", submissionType);
-            data.append("tags", formData.tags);
 
             if (submissionType === "paste") {
                 if (!formData.raw_content.trim()) {
@@ -70,14 +66,17 @@ function ContributeForm() {
             }
 
             toast.success("Post submitted successfully! Awaiting editor review.");
-            setFormData({ title: "", category: "article", tags: "", raw_content: "" });
+            setFormData({
+                title: "",
+
+                raw_content: "",
+            });
             setFile(null);
             setImages([]);
-            flushSync(() => setLoading(false));
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Submission failed");
         } finally {
-            flushSync(() => setLoading(false));
+            setLoading(false);
         }
     };
 
@@ -100,25 +99,6 @@ function ContributeForm() {
                         required
                     />
                     <p className="text-xs text-muted-foreground">{formData.title.length}/200</p>
-                </div>
-
-                {/* Category */}
-                <div className="space-y-2">
-                    <label className="text-sm font-medium">Category *</label>
-                    <Select
-                        value={formData.category}
-                        onValueChange={val => setFormData({ ...formData, category: val })}
-                    >
-                        <SelectTrigger>
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="article">Article</SelectItem>
-                            <SelectItem value="poem">Poem</SelectItem>
-                            <SelectItem value="artwork">Artwork</SelectItem>
-                            <SelectItem value="notice">Notice</SelectItem>
-                        </SelectContent>
-                    </Select>
                 </div>
 
                 {/* Submission Type */}
@@ -215,16 +195,6 @@ function ContributeForm() {
                         </div>
                     </div>
                 )}
-
-                {/* Tags */}
-                <div className="space-y-2">
-                    <label className="text-sm font-medium">Tags</label>
-                    <Input
-                        placeholder="Separate tags with commas"
-                        value={formData.tags}
-                        onChange={e => setFormData({ ...formData, tags: e.target.value })}
-                    />
-                </div>
 
                 {/* Alert */}
                 <Alert>

@@ -4,8 +4,8 @@ import mongoose, { Document, Schema, models } from "mongoose";
 export interface IPost extends Document {
     // Basic Info
     title: string;
-    category: "article" | "poem" | "artwork" | "notice";
-    tags: string[];
+    category?: "article" | "poem" | "artwork" | "notice";
+
     author: mongoose.Types.ObjectId; // References Profiles
     author_name: string; // Denormalized for quick access
     author_email: string; // For notifications
@@ -85,9 +85,9 @@ const PostSchema = new Schema<IPost>(
         category: {
             type: String,
             enum: ["article", "poem", "artwork", "notice"],
-            required: true,
+            required: false,
         },
-        tags: [{ type: String, trim: true, lowercase: true }],
+
         author: { type: Schema.Types.ObjectId, ref: "Profiles", required: true },
         author_name: { type: String, required: true, trim: true },
         author_email: { type: String, required: true, trim: true },

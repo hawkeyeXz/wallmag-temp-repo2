@@ -1,4 +1,3 @@
-import { PostCard } from "@/components/post-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { getFeatured, getLatestByCategory } from "@/lib/store";
@@ -52,62 +51,6 @@ export default async function HomePage() {
                         </div>
                     </Link>
                 ) : null}
-            </section>
-
-            <section className="space-y-4">
-                <div className="flex items-baseline justify-between">
-                    <h3 className="text-xl font-semibold">Latest Articles</h3>
-                    <Link href="/articles" className="text-sm text-muted-foreground hover:underline">
-                        View all
-                    </Link>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {latestArticles.map(p => (
-                        <PostCard key={p.id} post={p} />
-                    ))}
-                </div>
-            </section>
-
-            <section className="space-y-4">
-                <div className="flex items-baseline justify-between">
-                    <h3 className="text-xl font-semibold">Latest Poems</h3>
-                    <Link href="/poems" className="text-sm text-muted-foreground hover:underline">
-                        View all
-                    </Link>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {latestPoems.map(p => (
-                        <PostCard key={p.id} post={p} />
-                    ))}
-                </div>
-            </section>
-
-            <section className="space-y-4">
-                <div className="flex items-baseline justify-between">
-                    <h3 className="text-xl font-semibold">Latest Artwork</h3>
-                    <Link href="/gallery" className="text-sm text-muted-foreground hover:underline">
-                        View gallery
-                    </Link>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {latestArt.map(p => (
-                        <PostCard key={p.id} post={p} />
-                    ))}
-                </div>
-            </section>
-
-            <section className="space-y-4">
-                <div className="flex items-baseline justify-between">
-                    <h3 className="text-xl font-semibold">Latest News</h3>
-                    <Link href="/news" className="text-sm text-muted-foreground hover:underline">
-                        View all
-                    </Link>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {latestNews.map(p => (
-                        <PostCard key={p.id} post={p} />
-                    ))}
-                </div>
             </section>
         </div>
     );
