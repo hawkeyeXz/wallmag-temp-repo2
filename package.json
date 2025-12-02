@@ -51,6 +51,7 @@
         "isomorphic-dompurify": "latest",
         "jsdom": "^27.2.0",
         "jsonwebtoken": "latest",
+        "jszip": "^3.10.1",
         "lucide-react": "^0.555.0",
         "mongoose": "latest",
         "next": "^16.0.6",

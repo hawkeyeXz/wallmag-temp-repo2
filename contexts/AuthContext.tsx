@@ -1,137 +1,70 @@
-// contexts/AuthContext.tsx
 "use client";
 
-import { useRouter } from "next/navigation";
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { createContext, useContext, useEffect, useState } from "react";
 
 interface User {
     id_number: string;
     name: string;
     email: string;
-    two_factor_enabled: boolean;
+    role: "student" | "professor" | "editor" | "admin" | "publisher";
+    profile_picture_url?: string;
+    // Add other fields as needed
 }
 
 interface AuthContextType {
     user: User | null;
     loading: boolean;
-    isAuthenticated: boolean;
-    login: () => Promise<void>;
-    logout: () => Promise<void>;
-    refreshSession: () => Promise<void>;
+    login: (userData: User) => void;
+    logout: () => void;
+    checkAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-    const router = useRouter();
+export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
-
-    // Check authentication status on mount
-    useEffect(() => {
-        checkAuth();
-    }, []);
-
-    // Auto-refresh session every 6 days
-    useEffect(() => {
-        if (!user) return;
-
-        const REFRESH_INTERVAL = 6 * 24 * 60 * 60 * 1000; // 6 days
-        const intervalId = setInterval(refreshSession, REFRESH_INTERVAL);
-
-        return () => clearInterval(intervalId);
-    }, [user]);
+    const router = useRouter();
 
     const checkAuth = async () => {
         try {
-            // FIXED: Added credentials: "include" to send cookies
-            const response = await fetch("/api/user/profile", {
-                method: "GET",
-                credentials: "include", // CRITICAL: This sends the session cookie
-                headers: {
-                    "Content-Type": "application/json",
-                },
-            });
-
-            if (response.ok) {
-                const data = await response.json();
+            const res = await fetch("/api/user/profile");
+            if (res.ok) {
+                const data = await res.json();
                 setUser(data.user);
             } else {
                 setUser(null);
             }
         } catch (error) {
-            console.error("Auth check failed:", error);
+            console.error("Auth check failed", error);
             setUser(null);
         } finally {
             setLoading(false);
         }
     };
 
-    const login = async () => {
-        setLoading(true);
-        await checkAuth();
+    useEffect(() => {
+        checkAuth();
+    }, []);
+
+    const login = (userData: User) => {
+        setUser(userData);
+        // Optional: specific redirects based on role could go here
     };
 
     const logout = async () => {
         try {
-            const response = await fetch("/api/auth/logout", {
-                method: "POST",
-                credentials: "include", // Send session cookie
-                headers: {
-                    "Content-Type": "application/json",
-                },
-            });
-
-            if (!response.ok) {
-                console.warn("Logout API failed, clearing local session anyway");
-            }
-        } catch (error) {
-            console.error("Logout error:", error);
-            // Continue with logout even if API fails
-        } finally {
-            // Clear user state
+            await fetch("/api/auth/logout", { method: "POST" });
             setUser(null);
-
-            // Clear any cached data
-            if (typeof window !== "undefined") {
-                sessionStorage.clear();
-            }
-
-            // Redirect to login
             router.push("/auth/login");
-        }
-    };
-
-    const refreshSession = async () => {
-        try {
-            const response = await fetch("/api/auth/refresh-session", {
-                method: "POST",
-                credentials: "include", // Send session cookie
-                headers: {
-                    "Content-Type": "application/json",
-                },
-            });
-
-            if (response.ok) {
-                console.log("[Auth] Session refreshed successfully");
-            } else {
-                console.warn("[Auth] Session refresh failed, may need to re-login");
-            }
         } catch (error) {
-            console.error("[Auth] Session refresh failed:", error);
+            console.error("Logout failed", error);
         }
     };
 
-    const value = {
-        user,
-        loading,
-        isAuthenticated: !!user,
-        login,
-        logout,
-        refreshSession,
-    };
-
-    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+    return <AuthContext.Provider value={{ user, loading, login, logout, checkAuth }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
@@ -142,28 +75,47 @@ export function useAuth() {
     return context;
 }
 
-// Protected Route Wrapper Component
-export function ProtectedRoute({ children }: { children: ReactNode }) {
+// PROTECTED ROUTE WRAPPER
+// Updates: Added 'allowedRoles' prop for RBAC
+interface ProtectedRouteProps {
+    children: React.ReactNode;
+    allowedRoles?: string[];
+}
+
+export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
     const { user, loading } = useAuth();
     const router = useRouter();
+    const pathname = usePathname();
 
     useEffect(() => {
-        if (!loading && !user) {
-            router.push("/auth/login");
+        if (!loading) {
+            // 1. Not Logged In -> Redirect to Login
+            if (!user) {
+                // Encode the current path to redirect back after login
+                router.push(`/auth/login?redirect=${encodeURIComponent(pathname)}`);
+                return;
+            }
+
+            // 2. Role Check (if roles are specified) -> Redirect to Unauthorized
+            if (allowedRoles && allowedRoles.length > 0) {
+                if (!allowedRoles.includes(user.role)) {
+                    router.push("/unauthorized");
+                }
+            }
         }
-    }, [user, loading, router]);
+    }, [user, loading, router, allowedRoles, pathname]);
 
     if (loading) {
         return (
-            <div className="min-h-screen flex items-center justify-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900" />
+            <div className="flex h-screen w-full items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
         );
     }
 
-    if (!user) {
-        return null;
-    }
+    // Only render children if authorized
+    if (!user) return null;
+    if (allowedRoles && !allowedRoles.includes(user.role)) return null;
 
     return <>{children}</>;
 }

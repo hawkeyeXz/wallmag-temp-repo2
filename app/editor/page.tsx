@@ -6,10 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProtectedRoute, useAuth } from "@/contexts/AuthContext";
-import { RefreshCw } from "lucide-react";
+import { Download, Eye, RefreshCw, Upload } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { toast } from "sonner";
 import useSWR from "swr";
 
 async function fetcher(url: string) {
@@ -27,7 +29,8 @@ const statusColors: Record<string, string> = {
 
 export default function EditorPage() {
     return (
-        <ProtectedRoute>
+        // FIXED: Removed 'admin' from allowedRoles. Only 'editor' can access this page.
+        <ProtectedRoute allowedRoles={["editor"]}>
             <EditorDashboard />
         </ProtectedRoute>
     );
@@ -37,8 +40,8 @@ function EditorDashboard() {
     const { user } = useAuth();
     const [status, setStatus] = useState("PENDING_REVIEW");
     const [page, setPage] = useState(1);
+    const [downloading, setDownloading] = useState(false);
 
-    // This endpoint needs to be created/updated in step 5
     const { data, isLoading, mutate } = useSWR(
         `/api/posts/editor/pending?status=${status}&page=${page}&limit=10`,
         fetcher
@@ -46,7 +49,43 @@ function EditorDashboard() {
 
     const posts = data?.posts || [];
     const stats = data?.stats || {};
-    const categoryStats = data?.category_stats || {};
+
+    const handleDownload = async (id?: string) => {
+        setDownloading(true);
+        const toastId = toast.loading("Preparing download...");
+        try {
+            const query = id ? `id=${id}` : `status=${status}`;
+            const res = await fetch(`/api/download?${query}`);
+
+            if (!res.ok) throw new Error("Download failed");
+
+            // Extract filename from Content-Disposition header
+            const disposition = res.headers.get("Content-Disposition");
+            let filename = id ? `submission-${id}` : `submissions-${status}.zip`;
+
+            if (disposition && disposition.includes("attachment")) {
+                const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                const matches = filenameRegex.exec(disposition);
+                if (matches != null && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, "");
+                }
+            }
+
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename; // Use the correct filename/extension
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            toast.success("Download started", { id: toastId });
+        } catch (error) {
+            toast.error("Failed to download file(s)", { id: toastId });
+        } finally {
+            setDownloading(false);
+        }
+    };
 
     return (
         <div className="space-y-8">
@@ -56,10 +95,18 @@ function EditorDashboard() {
                     <h1 className="text-3xl font-bold tracking-tight">Editor Dashboard</h1>
                     <p className="text-muted-foreground">Review submissions and manage designs</p>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => mutate()}>
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Refresh
-                </Button>
+                <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => mutate()}>
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Refresh
+                    </Button>
+                    <Button asChild>
+                        <Link href="/editor/finalize">
+                            <Upload className="w-4 h-4 mr-2" />
+                            Finalize Magazine
+                        </Link>
+                    </Button>
+                </div>
             </div>
 
             {/* Stats Cards */}
@@ -81,19 +128,29 @@ function EditorDashboard() {
                 ))}
             </div>
 
-            {/* Filters */}
-            <div className="flex items-center gap-4">
-                <Select value={status} onValueChange={setStatus}>
-                    <SelectTrigger className="w-48">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="PENDING_REVIEW">Pending Review</SelectItem>
-                        <SelectItem value="ACCEPTED">Accepted</SelectItem>
-                        <SelectItem value="DESIGNING">Designing</SelectItem>
-                        <SelectItem value="ADMIN_REJECTED">Admin Rejected</SelectItem>
-                    </SelectContent>
-                </Select>
+            {/* Filters & Actions */}
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <Select value={status} onValueChange={setStatus}>
+                        <SelectTrigger className="w-48">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="PENDING_REVIEW">Pending Review</SelectItem>
+                            <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                            <SelectItem value="DESIGNING">Designing</SelectItem>
+                            <SelectItem value="ADMIN_REJECTED">Admin Rejected</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <Button
+                    variant="secondary"
+                    onClick={() => handleDownload()}
+                    disabled={downloading || posts.length === 0}
+                >
+                    <Download className="w-4 h-4 mr-2" />
+                    {downloading ? "Zipping..." : "Download All Files"}
+                </Button>
             </div>
 
             {/* Posts Table */}
@@ -117,7 +174,6 @@ function EditorDashboard() {
                                         <TableHead>Author</TableHead>
                                         <TableHead>Category</TableHead>
                                         <TableHead>Type</TableHead>
-                                        <TableHead>Submitted</TableHead>
                                         <TableHead>Status</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
@@ -138,20 +194,35 @@ function EditorDashboard() {
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="text-sm capitalize">{post.submission_type}</TableCell>
-                                            <TableCell className="text-sm text-muted-foreground">
-                                                {new Date(post.created_at).toLocaleDateString()}
-                                            </TableCell>
                                             <TableCell>
                                                 <Badge variant="secondary" className={statusColors[post.status]}>
                                                     {post.status.replace("_", " ")}
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="text-right">
-                                                <Button asChild variant="default" size="sm">
-                                                    <Link href={`/editor/${post._id}`}>
-                                                        {post.status === "PENDING_REVIEW" ? "Review" : "Manage"}
-                                                    </Link>
-                                                </Button>
+                                                <div className="flex justify-end gap-2">
+                                                    <TooltipProvider>
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={() => handleDownload(post._id)}
+                                                                >
+                                                                    <Download className="w-4 h-4 text-slate-500" />
+                                                                </Button>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>Download Files</TooltipContent>
+                                                        </Tooltip>
+                                                    </TooltipProvider>
+
+                                                    <Button asChild variant="ghost" size="sm">
+                                                        <Link href={`/editor/${post._id}`}>
+                                                            <Eye className="w-4 h-4 mr-1" />
+                                                            Preview
+                                                        </Link>
+                                                    </Button>
+                                                </div>
                                             </TableCell>
                                         </TableRow>
                                     ))}

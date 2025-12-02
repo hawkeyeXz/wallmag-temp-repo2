@@ -3,7 +3,8 @@ import Profiles from "@/app/models/Profiles";
 import { NextResponse } from "next/server";
 import { requireAuth } from "./middleware";
 
-export type Role = "student" | "Professor" | "editor" | "admin" | "publisher";
+// FIXED: Changed "Professor" to "professor" to match DB models
+export type Role = "student" | "professor" | "editor" | "admin" | "publisher";
 
 export type Permission =
     // Student permissions
@@ -18,7 +19,7 @@ export type Permission =
     | "download_original_files"
     | "upload_designed_version"
     | "view_all_posts"
-    | "register_users" // NEW: Editor can register students
+    | "register_users"
     // Publisher permissions
     | "publish_post"
     | "unpublish_post"
@@ -28,7 +29,7 @@ export type Permission =
     | "reject_designs"
     | "assign_editors"
     | "assign_publishers"
-    | "delete_any_post"
+    | "delete_post" // FIXED: Renamed from delete_any_post to match API usage
     | "view_analytics"
     | "manage_users";
 
@@ -38,34 +39,17 @@ export type Permission =
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     student: ["create_post", "view_own_posts", "view_published", "like_post", "comment_post"],
 
-    Professor: [
+    // FIXED: Lowercase "professor"
+    professor: [
         "create_post",
         "view_own_posts",
         "view_published",
         "like_post",
         "comment_post",
-        // Professors can also view pending submissions (optional)
         "view_pending_submissions",
     ],
 
     editor: [
-        // All student permissions
-        "create_post",
-        "view_own_posts",
-        "view_published",
-        "like_post",
-        "comment_post",
-        // Editor-specific
-        "view_pending_submissions",
-        "accept_reject_submissions",
-        "download_original_files",
-        "upload_designed_version",
-        "view_all_posts",
-        "register_users", // NEW: Can register students
-    ],
-
-    publisher: [
-        // All editor permissions
         "create_post",
         "view_own_posts",
         "view_published",
@@ -77,14 +61,26 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "upload_designed_version",
         "view_all_posts",
         "register_users",
-        // Publisher-specific (can publish directly)
+    ],
+
+    publisher: [
+        "create_post",
+        "view_own_posts",
+        "view_published",
+        "like_post",
+        "comment_post",
+        "view_pending_submissions",
+        "accept_reject_submissions",
+        "download_original_files",
+        "upload_designed_version",
+        "view_all_posts",
+        "register_users",
         "publish_post",
         "unpublish_post",
         "feature_post",
     ],
 
     admin: [
-        // All permissions
         "create_post",
         "view_own_posts",
         "view_published",
@@ -103,7 +99,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
         "reject_designs",
         "assign_editors",
         "assign_publishers",
-        "delete_any_post",
+        "delete_post", // FIXED
         "view_analytics",
         "manage_users",
     ],
@@ -132,8 +128,6 @@ export function hasAnyPermission(role: Role, permissions: Permission[]): boolean
 
 /**
  * Get profile from cache or database
- * @param id_number User ID number
- * @returns Profile document
  */
 async function getProfileWithCache(id_number: string) {
     const redis = (await import("@/lib/redis")).default;
@@ -143,7 +137,6 @@ async function getProfileWithCache(id_number: string) {
     const cached = await redis.get(cacheKey);
 
     if (cached) {
-        // Parse cached profile and convert to Mongoose document-like object
         const profileData = JSON.parse(cached);
         return {
             ...profileData,
@@ -152,11 +145,9 @@ async function getProfileWithCache(id_number: string) {
         };
     }
 
-    // Cache miss - fetch from database
-    const profile = await Profiles.findOne({ id_number }).lean(); // .lean() for better performance
+    const profile = await Profiles.findOne({ id_number }).lean();
 
     if (profile) {
-        // Cache for 1 hour
         await redis.set(cacheKey, JSON.stringify(profile), { EX: 3600 });
     }
 
@@ -164,7 +155,7 @@ async function getProfileWithCache(id_number: string) {
 }
 
 /**
- * Invalidate profile cache (call this when profile is updated)
+ * Invalidate profile cache
  */
 export async function invalidateProfileCache(id_number: string) {
     const redis = (await import("@/lib/redis")).default;
@@ -172,21 +163,14 @@ export async function invalidateProfileCache(id_number: string) {
 }
 
 /**
- * Middleware to require authentication and specific permission
- * Use this in API routes that need permission checks
+ * Middleware: require specific permission
  */
 export async function requirePermission(permission: Permission) {
-    // First, check authentication
     const { error: authError, user } = await requireAuth();
     if (authError) {
-        return {
-            error: authError,
-            user: null,
-            profile: null,
-        };
+        return { error: authError, user: null, profile: null };
     }
 
-    // Fetch user profile from cache or database
     const profile = await getProfileWithCache(user.id_number);
     if (!profile) {
         return {
@@ -196,7 +180,6 @@ export async function requirePermission(permission: Permission) {
         };
     }
 
-    // Check permission
     if (!hasPermission(profile.role, permission)) {
         return {
             error: NextResponse.json({ message: "Insufficient permissions", required: permission }, { status: 403 }),
@@ -205,24 +188,16 @@ export async function requirePermission(permission: Permission) {
         };
     }
 
-    return {
-        error: null,
-        user,
-        profile,
-    };
+    return { error: null, user, profile };
 }
 
 /**
- * Middleware to require authentication and ANY of the specified permissions
+ * Middleware: require any of the permissions
  */
 export async function requireAnyPermission(permissions: Permission[]) {
     const { error: authError, user } = await requireAuth();
     if (authError) {
-        return {
-            error: authError,
-            user: null,
-            profile: null,
-        };
+        return { error: authError, user: null, profile: null };
     }
 
     const profile = await getProfileWithCache(user.id_number);
@@ -245,24 +220,16 @@ export async function requireAnyPermission(permissions: Permission[]) {
         };
     }
 
-    return {
-        error: null,
-        user,
-        profile,
-    };
+    return { error: null, user, profile };
 }
 
 /**
- * Middleware to require authentication and ALL specified permissions
+ * Middleware: require all permissions
  */
 export async function requireAllPermissions(permissions: Permission[]) {
     const { error: authError, user } = await requireAuth();
     if (authError) {
-        return {
-            error: authError,
-            user: null,
-            profile: null,
-        };
+        return { error: authError, user: null, profile: null };
     }
 
     const profile = await getProfileWithCache(user.id_number);
@@ -285,24 +252,16 @@ export async function requireAllPermissions(permissions: Permission[]) {
         };
     }
 
-    return {
-        error: null,
-        user,
-        profile,
-    };
+    return { error: null, user, profile };
 }
 
 /**
- * Middleware to require specific role(s)
+ * Middleware: require specific role
  */
 export async function requireRole(allowedRoles: Role[]) {
     const { error: authError, user } = await requireAuth();
     if (authError) {
-        return {
-            error: authError,
-            user: null,
-            profile: null,
-        };
+        return { error: authError, user: null, profile: null };
     }
 
     const profile = await getProfileWithCache(user.id_number);
@@ -322,25 +281,16 @@ export async function requireRole(allowedRoles: Role[]) {
         };
     }
 
-    return {
-        error: null,
-        user,
-        profile,
-    };
+    return { error: null, user, profile };
 }
 
 /**
- * Get user's profile with role (for client-side checks)
- * Use this in API routes that just need to know the user's role
+ * Get authenticated profile
  */
 export async function getAuthenticatedProfile() {
     const { error: authError, user } = await requireAuth();
     if (authError) {
-        return {
-            error: authError,
-            user: null,
-            profile: null,
-        };
+        return { error: authError, user: null, profile: null };
     }
 
     const profile = await getProfileWithCache(user.id_number);
@@ -352,9 +302,5 @@ export async function getAuthenticatedProfile() {
         };
     }
 
-    return {
-        error: null,
-        user,
-        profile,
-    };
+    return { error: null, user, profile };
 }

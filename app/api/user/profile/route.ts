@@ -1,4 +1,3 @@
-// app/api/user/profile/route.ts
 import Profile from "@/app/models/Profiles";
 import { dbConnect } from "@/lib/mongoose";
 import redis from "@/lib/redis";
@@ -10,56 +9,39 @@ export async function GET(req: Request) {
     try {
         await dbConnect();
 
-        // Get session token from cookies
         const cookieStore = await cookies();
         const token = cookieStore.get("session_token")?.value;
 
-        console.log("[DEBUG] Profile API - Token present:", !!token);
-
         if (!token) {
-            console.log("[DEBUG] Profile API - No token found in cookies");
             return NextResponse.json({ message: "Not authenticated" }, { status: 401 });
         }
 
-        // Verify JWT token
         let decoded: any;
         try {
             decoded = jwt.verify(token, process.env.JWT_SECRET!);
-            console.log("[DEBUG] Profile API - Token decoded:", decoded.id_number?.substring(0, 3) + "***");
         } catch (err) {
-            console.error("[DEBUG] Profile API - Token verification failed:", err);
-            // Invalid token, clear it
             cookieStore.delete("session_token");
             return NextResponse.json({ message: "Invalid session" }, { status: 401 });
         }
 
-        // Validate token type
         if (decoded.type !== "authenticated_session") {
-            console.log("[DEBUG] Profile API - Invalid token type:", decoded.type);
             return NextResponse.json({ message: "Invalid token type" }, { status: 401 });
         }
 
-        // Check if token is blacklisted
         if (decoded.jti) {
             const blacklisted = await redis.exists(`token:blacklist:${decoded.jti}`);
             if (blacklisted) {
-                console.log("[DEBUG] Profile API - Token blacklisted");
                 cookieStore.delete("session_token");
                 return NextResponse.json({ message: "Session revoked" }, { status: 401 });
             }
         }
 
-        // Fetch user profile from database
-        const profile = await Profile.findOne({ id_number: decoded.id_number }).select("-password -__v"); // Don't return password
+        const profile = await Profile.findOne({ id_number: decoded.id_number }).select("-password -__v");
 
         if (!profile) {
-            console.log("[DEBUG] Profile API - Profile not found for:", decoded.id_number?.substring(0, 3) + "***");
             return NextResponse.json({ message: "Profile not found" }, { status: 404 });
         }
 
-        console.log("[DEBUG] Profile API - Success for:", profile.id_number?.substring(0, 3) + "***");
-
-        // Return user data
         return NextResponse.json(
             {
                 user: {
@@ -68,6 +50,10 @@ export async function GET(req: Request) {
                     email: profile.email,
                     two_factor_enabled: profile.two_factor_enabled || false,
                     role: profile.role || "user",
+                    // ADDED: Return the profile picture URL
+                    profile_picture_url: profile.profile_picture_url || null,
+                    bio: profile.bio || "",
+                    social_links: profile.social_links || {},
                 },
             },
             { status: 200 }
@@ -78,43 +64,32 @@ export async function GET(req: Request) {
     }
 }
 
-// Update profile
+// Update basic info (Name, Bio, etc.)
 export async function PATCH(req: Request) {
     try {
         await dbConnect();
-
         const cookieStore = await cookies();
         const token = cookieStore.get("session_token")?.value;
 
-        if (!token) {
-            return NextResponse.json({ message: "Not authenticated" }, { status: 401 });
-        }
+        if (!token) return NextResponse.json({ message: "Not authenticated" }, { status: 401 });
 
         let decoded: any;
         try {
             decoded = jwt.verify(token, process.env.JWT_SECRET!);
         } catch (err) {
-            cookieStore.delete("session_token");
             return NextResponse.json({ message: "Invalid session" }, { status: 401 });
         }
 
-        if (decoded.type !== "authenticated_session") {
-            return NextResponse.json({ message: "Invalid token type" }, { status: 401 });
-        }
-
         const body = await req.json();
-        const { name } = body;
-
-        if (!name || typeof name !== "string" || name.trim().length === 0) {
-            return NextResponse.json({ message: "Invalid name" }, { status: 400 });
-        }
+        const { name, bio, social_links } = body;
 
         const profile = await Profile.findOne({ id_number: decoded.id_number });
-        if (!profile) {
-            return NextResponse.json({ message: "Profile not found" }, { status: 404 });
-        }
+        if (!profile) return NextResponse.json({ message: "Profile not found" }, { status: 404 });
 
-        profile.name = name.trim();
+        if (name) profile.name = name.trim();
+        if (bio !== undefined) profile.bio = bio.trim();
+        if (social_links) profile.social_links = { ...profile.social_links, ...social_links };
+
         await profile.save();
 
         return NextResponse.json(
@@ -123,6 +98,9 @@ export async function PATCH(req: Request) {
                 user: {
                     name: profile.name,
                     email: profile.email,
+                    profile_picture_url: profile.profile_picture_url,
+                    bio: profile.bio,
+                    social_links: profile.social_links,
                 },
             },
             { status: 200 }

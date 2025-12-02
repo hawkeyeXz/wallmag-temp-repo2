@@ -14,7 +14,7 @@ export interface IProfiles extends Document {
     };
     date_of_birth?: Date;
     password: string;
-    role: "student" | "Professor" | "editor" | "admin";
+    role: "student" | "professor" | "editor" | "admin";
     created_at?: Date;
     updated_at?: Date;
     last_login?: Date;
@@ -37,13 +37,13 @@ const ProfilesSchema = new Schema<IProfiles>(
         password: { type: String, required: true },
         role: {
             type: String,
-            enum: ["student", "Professor", "editor", "admin"],
+            enum: ["student", "professor", "editor", "admin"],
             default: null,
             required: true,
         },
         last_login: { type: Date, required: false },
     },
-    { timestamps: { createdAt: "created_at", updatedAt: false } }
+    { timestamps: { createdAt: "created_at", updatedAt: "updated_at" } }
 );
 
 const Profiles = models.Profiles || mongoose.model<IProfiles>("Profiles", ProfilesSchema);

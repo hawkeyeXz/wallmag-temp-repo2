@@ -6,32 +6,20 @@ export interface IPost extends Document {
     category?: "article" | "poem" | "artwork" | "notice";
 
     author: mongoose.Types.ObjectId; // References Profiles
-    author_name: string; // Denormalized for quick access
-    author_email: string; // For notifications
+    author_name: string;
+    author_email: string;
 
     // Submission Stage
     submission_type: "upload" | "paste" | "image_upload";
 
-    // Original File (DOCX/PDF) - Stored in Vercel Blob
+    // Original File (DOCX/PDF/TXT/Images) - Stored in Vercel Blob
     original_file?: {
-        url: string; // Blob URL
+        url: string;
         filename: string;
         mimetype: string;
         size: number;
         uploaded_at: Date;
     };
-
-    // Raw Content (if pasted)
-    raw_content?: string;
-
-    // Original Images (Artwork) - Stored in Vercel Blob
-    original_images?: Array<{
-        url: string; // Blob URL
-        filename: string;
-        mimetype: string;
-        size: number;
-        uploaded_at: Date;
-    }>;
 
     // Editorial Workflow
     status:
@@ -49,38 +37,20 @@ export interface IPost extends Document {
     reviewed_at?: Date;
     rejection_reason?: string;
 
-    // Designed Files (Final Versions) - Stored in Vercel Blob
-    designed_files: Array<{
-        url: string; // Blob URL
-        filename: string;
-        mimetype: string;
-        size: number;
-        uploaded_by: mongoose.Types.ObjectId;
-        uploaded_at: Date;
-        version: number;
-        is_current: boolean;
-    }>;
-
     // Publishing
     published_at?: Date;
     published_by?: mongoose.Types.ObjectId;
     featured_until?: Date;
     excerpt?: string;
 
-    // Engagement
-    likes: mongoose.Types.ObjectId[];
-    views: number;
-    comments_count: number;
-
     // Metadata
     created_at: Date;
-    updated_at: Date;
 }
 
 const PostSchema = new Schema<IPost>(
     {
         // Basic Info
-        title: { type: String, required: true, trim: true, maxlength: 200 },
+        title: { type: String, required: true, trim: true, maxlength: 200 }, // Global unique removed
         category: {
             type: String,
             enum: ["article", "poem", "artwork", "notice"],
@@ -98,39 +68,14 @@ const PostSchema = new Schema<IPost>(
             required: true,
         },
 
-        // Original Document Upload
+        // Original Document Upload (Now handles pasted text as .txt files too)
         original_file: {
-            url: { type: String }, // Changed from file_id to url
+            url: { type: String },
             filename: { type: String },
-            mimetype: {
-                type: String,
-                enum: [
-                    "application/pdf",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "text/plain",
-                ],
-            },
+            mimetype: { type: String },
             size: { type: Number },
             uploaded_at: { type: Date },
         },
-
-        // Pasted Text
-        raw_content: { type: String, maxlength: 50000 },
-
-        // Original Image Upload
-        original_images: [
-            {
-                url: { type: String, required: true }, // Changed from file_id to url
-                filename: { type: String, required: true },
-                mimetype: {
-                    type: String,
-                    enum: ["image/jpeg", "image/png", "image/jpg", "image/webp"],
-                    required: true,
-                },
-                size: { type: Number, required: true },
-                uploaded_at: { type: Date, default: Date.now },
-            },
-        ],
 
         // Workflow
         status: {
@@ -152,45 +97,14 @@ const PostSchema = new Schema<IPost>(
         reviewed_at: { type: Date },
         rejection_reason: { type: String, maxlength: 1000 },
 
-        // Designed Files
-        designed_files: [
-            {
-                url: { type: String, required: true }, // Changed from file_id to url
-                filename: { type: String, required: true },
-                mimetype: {
-                    type: String,
-                    enum: [
-                        "image/jpeg",
-                        "image/png",
-                        "image/jpg",
-                        "image/webp",
-                        "application/pdf",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        "application/vnd.oasis.opendocument.text",
-                    ],
-                    required: true,
-                },
-                size: { type: Number, required: true },
-                uploaded_by: { type: Schema.Types.ObjectId, ref: "Profiles", required: true },
-                uploaded_at: { type: Date, default: Date.now },
-                version: { type: Number, required: true },
-                is_current: { type: Boolean, default: true },
-            },
-        ],
-
         // Publishing
         published_at: { type: Date },
         published_by: { type: Schema.Types.ObjectId, ref: "Profiles" },
         featured_until: { type: Date },
         excerpt: { type: String, maxlength: 300 },
-
-        // Engagement
-        likes: [{ type: Schema.Types.ObjectId, ref: "Profiles" }],
-        views: { type: Number, default: 0 },
-        comments_count: { type: Number, default: 0 },
     },
     {
-        timestamps: { createdAt: "created_at", updatedAt: "updated_at" },
+        timestamps: { createdAt: "created_at", updatedAt: false }, // UpdatedAt disabled
     }
 );
 
@@ -200,13 +114,8 @@ PostSchema.index({ author: 1, created_at: -1 });
 PostSchema.index({ status: 1, category: 1 });
 PostSchema.index({ published_at: -1 }, { sparse: true });
 
-// Auto-generate excerpt
-PostSchema.pre("save", function (next) {
-    if (!this.excerpt && this.raw_content) {
-        this.excerpt = this.raw_content.slice(0, 200).trim() + (this.raw_content.length > 200 ? "..." : "");
-    }
-    next();
-});
+// COMPOUND INDEX: Ensures a single author cannot reuse the same title, but others can.
+PostSchema.index({ author: 1, title: 1 }, { unique: true });
 
 const Post = models.Post || mongoose.model<IPost>("Post", PostSchema);
 export default Post;

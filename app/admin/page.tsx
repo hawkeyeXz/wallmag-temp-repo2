@@ -6,10 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProtectedRoute, useAuth } from "@/contexts/AuthContext";
-import { CheckCircle2, FileText, RefreshCw, TrendingUp, Users } from "lucide-react";
+import { CheckCircle2, Download, FileText, RefreshCw, TrendingUp, Users } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { toast } from "sonner";
 import useSWR from "swr";
 
 async function fetcher(url: string) {
@@ -26,7 +28,7 @@ const statusColors: Record<string, string> = {
 
 export default function AdminPage() {
     return (
-        <ProtectedRoute>
+        <ProtectedRoute allowedRoles={["admin"]}>
             <AdminDashboard />
         </ProtectedRoute>
     );
@@ -36,11 +38,8 @@ function AdminDashboard() {
     const { user } = useAuth();
     const [status, setStatus] = useState("AWAITING_ADMIN");
     const [page, setPage] = useState(1);
+    const [downloading, setDownloading] = useState(false);
 
-    // Re-using the editor pending route or create a specific admin one.
-    // For simplicity, let's assume a dedicated admin endpoint or reuse with query params.
-    // We will create a specific admin endpoint in the next step if needed, but for now
-    // let's assume we fetch "awaiting" posts.
     const { data, isLoading, mutate } = useSWR(
         `/api/posts/admin/awaiting?status=${status}&page=${page}&limit=10`,
         fetcher
@@ -51,13 +50,51 @@ function AdminDashboard() {
     const posts = data?.posts || [];
     const stats = data?.stats || {};
     const analytics = analyticsData?.overview || {};
-    const recentPublished = data?.recent_published || [];
+
+    const handleDownload = async (id?: string) => {
+        setDownloading(true);
+        const toastId = toast.loading("Preparing download...");
+        try {
+            const query = id ? `id=${id}` : `status=${status}`;
+            const res = await fetch(`/api/download?${query}`);
+
+            if (!res.ok) throw new Error("Download failed");
+
+            // Extract filename from header
+            const disposition = res.headers.get("Content-Disposition");
+            let filename = id ? `submission-${id}` : `submissions-${status}.zip`;
+
+            if (disposition && disposition.includes("attachment")) {
+                const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                const matches = filenameRegex.exec(disposition);
+                if (matches != null && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, "");
+                }
+            }
+
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename; // Use correct filename from server
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            toast.success("Download started", { id: toastId });
+        } catch (error) {
+            toast.error("Failed to download file(s)", { id: toastId });
+        } finally {
+            setDownloading(false);
+        }
+    };
 
     return (
         <div className="space-y-8">
-            <div>
-                <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-                <p className="text-muted-foreground">Manage posts and platform analytics</p>
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-3xl font-bold">Admin Dashboard</h1>
+                    <p className="text-muted-foreground">Manage posts and platform analytics</p>
+                </div>
             </div>
 
             {/* Overview Stats */}
@@ -88,19 +125,29 @@ function AdminDashboard() {
             </div>
 
             {/* Filters */}
-            <div className="flex items-center gap-4">
-                <Select value={status} onValueChange={setStatus}>
-                    <SelectTrigger className="w-48">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="AWAITING_ADMIN">Awaiting Admin</SelectItem>
-                        <SelectItem value="APPROVED">Approved</SelectItem>
-                        <SelectItem value="PUBLISHED">Published</SelectItem>
-                    </SelectContent>
-                </Select>
-                <Button variant="outline" size="sm" onClick={() => mutate()}>
-                    <RefreshCw className="w-4 h-4" />
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <Select value={status} onValueChange={setStatus}>
+                        <SelectTrigger className="w-48">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="AWAITING_ADMIN">Awaiting Admin</SelectItem>
+                            <SelectItem value="APPROVED">Approved</SelectItem>
+                            <SelectItem value="PUBLISHED">Published</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Button variant="outline" size="sm" onClick={() => mutate()}>
+                        <RefreshCw className="w-4 h-4" />
+                    </Button>
+                </div>
+                <Button
+                    variant="secondary"
+                    onClick={() => handleDownload()}
+                    disabled={downloading || posts.length === 0}
+                >
+                    <Download className="w-4 h-4 mr-2" />
+                    {downloading ? "Zipping..." : "Download All Files"}
                 </Button>
             </div>
 
@@ -146,9 +193,26 @@ function AdminDashboard() {
                                                 <Badge className={statusColors[post.status]}>{post.status}</Badge>
                                             </TableCell>
                                             <TableCell className="text-right">
-                                                <Button asChild variant="ghost" size="sm">
-                                                    <Link href={`/admin/${post._id}`}>Review</Link>
-                                                </Button>
+                                                <div className="flex justify-end gap-2">
+                                                    <TooltipProvider>
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={() => handleDownload(post._id)}
+                                                                >
+                                                                    <Download className="w-4 h-4 text-slate-500" />
+                                                                </Button>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>Download Files</TooltipContent>
+                                                        </Tooltip>
+                                                    </TooltipProvider>
+
+                                                    <Button asChild variant="ghost" size="sm">
+                                                        <Link href={`/admin/${post._id}`}>Review</Link>
+                                                    </Button>
+                                                </div>
                                             </TableCell>
                                         </TableRow>
                                     ))}

@@ -51,25 +51,14 @@ export async function GET(req: Request) {
             .sort({ published_at: -1, created_at: -1 })
             .skip(skip)
             .limit(limitNum)
-            .select("-original_file -original_images -raw_content") // Lightweight for list view
+            .select("-original_file") // Lightweight for list view
             .lean();
 
         const total = await Post.countDocuments(query);
 
         // Map for frontend consistency
-        const items = posts.map((post: any) => {
-            // Determine display image
-            let image = null;
-            if (post.designed_files?.length > 0) {
-                // Use the current version of designed file if it's an image
-                const current = post.designed_files.find((f: any) => f.is_current);
-                if (current && current.mimetype.startsWith("image/")) {
-                    image = current.url;
-                }
-            } else if (post.original_images?.length > 0) {
-                image = post.original_images[0].url;
-            }
-
+        // Explicitly cast 'posts' to any[] to avoid TS errors
+        const items = (posts as any[]).map((post: any) => {
             return {
                 id: post._id,
                 title: post.title,
@@ -77,9 +66,6 @@ export async function GET(req: Request) {
                 date: post.published_at || post.created_at,
                 category: post.category,
                 excerpt: post.excerpt,
-                image: image,
-                likes: post.likes?.length || 0,
-                views: post.views || 0,
                 status: post.status,
             };
         });
@@ -117,19 +103,30 @@ export async function POST(req: Request) {
         const titleCheck = validatePostTitle(title);
         if (!titleCheck.valid) return NextResponse.json({ message: titleCheck.error }, { status: 400 });
 
-        if (category) {
-            // Allow category to be optional on submission, but if present, valid
-            // NOTE: You might want to force category selection depending on UI
-            // const catCheck = validateCategory(category);
-            // if (!catCheck.valid) return NextResponse.json({ message: catCheck.error }, { status: 400 });
+        // Ensure sanitized title is a string (fallback to original or empty string if undefined)
+        const sanitizedTitle = titleCheck.sanitized || title || "";
+
+        // --- UNIQUE TITLE CHECK (PER AUTHOR) ---
+        // Check if THIS author already has a post with THIS title
+        const existingPost = await Post.findOne({
+            title: { $regex: new RegExp(`^${sanitizedTitle}$`, "i") },
+            author: profile._id, // Scoped to current user
+        });
+
+        if (existingPost) {
+            return NextResponse.json(
+                { message: "You have already submitted a post with this title." },
+                { status: 409 }
+            );
         }
+        // ---------------------------------------
 
         const typeCheck = validateSubmissionType(submissionType);
         if (!typeCheck.valid) return NextResponse.json({ message: typeCheck.error }, { status: 400 });
 
         // 4. Prepare Post Object
         const newPost: any = {
-            title: titleCheck.sanitized,
+            title: sanitizedTitle,
             category: category || undefined,
             author: profile._id,
             author_name: profile.name,
@@ -143,11 +140,24 @@ export async function POST(req: Request) {
         if (submissionType === "paste") {
             const contentCheck = validateRawContent(rawContent);
             if (!contentCheck.valid) return NextResponse.json({ message: contentCheck.error }, { status: 400 });
-            newPost.raw_content = contentCheck.sanitized;
 
-            // Auto-excerpt
-            newPost.excerpt =
-                contentCheck.sanitized?.slice(0, 200) + (contentCheck.sanitized!.length > 200 ? "..." : "");
+            const content = contentCheck.sanitized || "";
+
+            // Convert Text to File & Upload
+            const blob = new Blob([content], { type: "text/plain" });
+            const file = new File([blob], `${sanitizedTitle.substring(0, 20)}.txt`, { type: "text/plain" });
+
+            const url = await uploadFile(file, "submissions/pasted");
+
+            newPost.original_file = {
+                url: url,
+                filename: file.name,
+                mimetype: "text/plain",
+                size: file.size,
+                uploaded_at: new Date(),
+            };
+
+            newPost.excerpt = content.slice(0, 200) + (content.length > 200 ? "..." : "");
         } else if (submissionType === "upload") {
             const file = formData.get("file") as File;
             if (!file) return NextResponse.json({ message: "File is required for upload type" }, { status: 400 });
@@ -155,58 +165,45 @@ export async function POST(req: Request) {
             const fileCheck = validateFile(file, FILE_TYPES.DOCUMENTS, MAX_FILE_SIZES.ORIGINAL_DOCUMENT);
             if (!fileCheck.valid) return NextResponse.json({ message: fileCheck.error }, { status: 400 });
 
-            // Upload to Blob
             const url = await uploadFile(file, "submissions/docs");
 
             newPost.original_file = {
-                url: url, // Storing URL string now
+                url: url,
                 filename: file.name,
                 mimetype: file.type,
                 size: file.size,
                 uploaded_at: new Date(),
             };
         } else if (submissionType === "image_upload") {
-            // Handle multiple images
             const images = formData.getAll("images") as File[];
             if (!images || images.length === 0) {
                 return NextResponse.json({ message: "At least one image is required" }, { status: 400 });
             }
 
-            if (images.length > 10) {
-                return NextResponse.json({ message: "Maximum 10 images allowed" }, { status: 400 });
+            const img = images[0];
+            const imgCheck = validateFile(img, FILE_TYPES.IMAGES, MAX_FILE_SIZES.ORIGINAL_IMAGE);
+            if (!imgCheck.valid) {
+                return NextResponse.json({ message: `Image ${img.name}: ${imgCheck.error}` }, { status: 400 });
             }
 
-            const uploadedImages = [];
+            const url = await uploadFile(img, "submissions/images");
 
-            for (const img of images) {
-                const imgCheck = validateFile(img, FILE_TYPES.IMAGES, MAX_FILE_SIZES.ORIGINAL_IMAGE);
-                if (!imgCheck.valid) {
-                    return NextResponse.json({ message: `Image ${img.name}: ${imgCheck.error}` }, { status: 400 });
-                }
-
-                const url = await uploadFile(img, "submissions/images");
-                uploadedImages.push({
-                    url: url,
-                    filename: img.name,
-                    mimetype: img.type,
-                    size: img.size,
-                    uploaded_at: new Date(),
-                });
-            }
-
-            newPost.original_images = uploadedImages;
+            newPost.original_file = {
+                url: url,
+                filename: img.name,
+                mimetype: img.type,
+                size: img.size,
+                uploaded_at: new Date(),
+            };
         }
 
         // 6. Save to DB
         const post = await Post.create(newPost);
 
-        // 7. Update User Stats (Optional but recommended)
-        // await Profiles.findByIdAndUpdate(profile._id, { $inc: { posts_count: 1 } });
-
         return NextResponse.json(
             {
                 message: "Post submitted successfully",
-                post: { id: post._id, status: post.status },
+                // post: { id: post._id, status: post.status },
             },
             { status: 201 }
         );

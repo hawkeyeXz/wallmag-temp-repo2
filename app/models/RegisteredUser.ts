@@ -1,16 +1,16 @@
 import mongoose, { Document, models, Schema } from "mongoose";
 
-export interface IRegisterdUsers extends Document {
+export interface IRegisteredUsers extends Document {
     name: string;
     id_number: string;
     email: string;
     phone?: string;
     department?: string;
     is_signed_up: boolean;
-    role?: "student" | "Professor" | "editor" | "admin";
+    role?: "student" | "professor" | "editor" | "admin";
 }
 
-const ResgisteredUsersSchema = new Schema<IRegisterdUsers>(
+const RegisteredUsersSchema = new Schema<IRegisteredUsers>(
     {
         name: { type: String, required: true, trim: true },
         id_number: { type: String, required: true, unique: true, trim: true },
@@ -18,11 +18,11 @@ const ResgisteredUsersSchema = new Schema<IRegisterdUsers>(
         phone: { type: String, required: false, unique: true, trim: true },
         department: { type: String, required: false, trim: true },
         is_signed_up: { type: Boolean, default: false },
-        role: { type: String, enum: ["student", "Professor", "editor", "admin"], default: "student" },
+        role: { type: String, enum: ["student", "professor", "editor", "admin"], default: "student" },
     },
     { timestamps: true }
 );
 
 const RegisteredUsers =
-    models.RegisteredUsers || mongoose.model<IRegisterdUsers>("RegisteredUsers", ResgisteredUsersSchema);
+    models.RegisteredUsers || mongoose.model<IRegisteredUsers>("RegisteredUsers", RegisteredUsersSchema);
 export default RegisteredUsers;
