@@ -1,0 +1,217 @@
+import Post from "@/app/models/Post";
+import { requirePermission } from "@/lib/auth/permissions";
+import { FILE_TYPES, MAX_FILE_SIZES, uploadFile, validateFile } from "@/lib/blob";
+import { dbConnect } from "@/lib/mongoose";
+import {
+    validatePagination,
+    validatePostTitle,
+    validateRawContent,
+    validateSubmissionType,
+} from "@/lib/security/validators";
+import { NextResponse } from "next/server";
+
+// GET - Public Feed & Filtering
+export async function GET(req: Request) {
+    try {
+        await dbConnect();
+
+        const { searchParams } = new URL(req.url);
+        const q = searchParams.get("q") || "";
+        const category = searchParams.get("category");
+        const page = searchParams.get("page");
+        const limit = searchParams.get("limit");
+
+        // Validate pagination
+        const pageValidation = validatePagination(page, limit);
+        if (!pageValidation.valid) {
+            return NextResponse.json({ message: pageValidation.error }, { status: 400 });
+        }
+
+        const pageNum = parseInt(page || "1");
+        const limitNum = parseInt(limit || "10");
+        const skip = (pageNum - 1) * limitNum;
+
+        // Build Query
+        const query: any = { status: "PUBLISHED" };
+
+        if (category && category !== "all") {
+            query.category = category;
+        }
+
+        if (q) {
+            query.$or = [
+                { title: { $regex: q, $options: "i" } },
+                { excerpt: { $regex: q, $options: "i" } },
+                { author_name: { $regex: q, $options: "i" } },
+            ];
+        }
+
+        // Execute Query
+        const posts = await Post.find(query)
+            .sort({ published_at: -1, created_at: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .select("-original_file -original_images -raw_content") // Lightweight for list view
+            .lean();
+
+        const total = await Post.countDocuments(query);
+
+        // Map for frontend consistency
+        const items = posts.map((post: any) => {
+            // Determine display image
+            let image = null;
+            if (post.designed_files?.length > 0) {
+                // Use the current version of designed file if it's an image
+                const current = post.designed_files.find((f: any) => f.is_current);
+                if (current && current.mimetype.startsWith("image/")) {
+                    image = current.url;
+                }
+            } else if (post.original_images?.length > 0) {
+                image = post.original_images[0].url;
+            }
+
+            return {
+                id: post._id,
+                title: post.title,
+                author: post.author_name,
+                date: post.published_at || post.created_at,
+                category: post.category,
+                excerpt: post.excerpt,
+                image: image,
+                likes: post.likes?.length || 0,
+                views: post.views || 0,
+                status: post.status,
+            };
+        });
+
+        return NextResponse.json({
+            items,
+            total,
+            page: pageNum,
+            pageSize: limitNum,
+            totalPages: Math.ceil(total / limitNum),
+        });
+    } catch (error) {
+        console.error("[ERROR] Get posts failed:", error);
+        return NextResponse.json({ message: "Failed to fetch posts" }, { status: 500 });
+    }
+}
+
+// POST - Create New Submission
+export async function POST(req: Request) {
+    try {
+        // 1. Auth & Permission Check
+        const { error, user, profile } = await requirePermission("create_post");
+        if (error) return error;
+
+        await dbConnect();
+
+        // 2. Parse Form Data
+        const formData = await req.formData();
+        const title = formData.get("title") as string;
+        const category = formData.get("category") as string; // Optional
+        const submissionType = formData.get("submission_type") as string;
+        const rawContent = formData.get("raw_content") as string;
+
+        // 3. Validation
+        const titleCheck = validatePostTitle(title);
+        if (!titleCheck.valid) return NextResponse.json({ message: titleCheck.error }, { status: 400 });
+
+        if (category) {
+            // Allow category to be optional on submission, but if present, valid
+            // NOTE: You might want to force category selection depending on UI
+            // const catCheck = validateCategory(category);
+            // if (!catCheck.valid) return NextResponse.json({ message: catCheck.error }, { status: 400 });
+        }
+
+        const typeCheck = validateSubmissionType(submissionType);
+        if (!typeCheck.valid) return NextResponse.json({ message: typeCheck.error }, { status: 400 });
+
+        // 4. Prepare Post Object
+        const newPost: any = {
+            title: titleCheck.sanitized,
+            category: category || undefined,
+            author: profile._id,
+            author_name: profile.name,
+            author_email: profile.email,
+            submission_type: submissionType,
+            status: "PENDING_REVIEW",
+            created_at: new Date(),
+        };
+
+        // 5. Handle Content/Files based on Type
+        if (submissionType === "paste") {
+            const contentCheck = validateRawContent(rawContent);
+            if (!contentCheck.valid) return NextResponse.json({ message: contentCheck.error }, { status: 400 });
+            newPost.raw_content = contentCheck.sanitized;
+
+            // Auto-excerpt
+            newPost.excerpt =
+                contentCheck.sanitized?.slice(0, 200) + (contentCheck.sanitized!.length > 200 ? "..." : "");
+        } else if (submissionType === "upload") {
+            const file = formData.get("file") as File;
+            if (!file) return NextResponse.json({ message: "File is required for upload type" }, { status: 400 });
+
+            const fileCheck = validateFile(file, FILE_TYPES.DOCUMENTS, MAX_FILE_SIZES.ORIGINAL_DOCUMENT);
+            if (!fileCheck.valid) return NextResponse.json({ message: fileCheck.error }, { status: 400 });
+
+            // Upload to Blob
+            const url = await uploadFile(file, "submissions/docs");
+
+            newPost.original_file = {
+                url: url, // Storing URL string now
+                filename: file.name,
+                mimetype: file.type,
+                size: file.size,
+                uploaded_at: new Date(),
+            };
+        } else if (submissionType === "image_upload") {
+            // Handle multiple images
+            const images = formData.getAll("images") as File[];
+            if (!images || images.length === 0) {
+                return NextResponse.json({ message: "At least one image is required" }, { status: 400 });
+            }
+
+            if (images.length > 10) {
+                return NextResponse.json({ message: "Maximum 10 images allowed" }, { status: 400 });
+            }
+
+            const uploadedImages = [];
+
+            for (const img of images) {
+                const imgCheck = validateFile(img, FILE_TYPES.IMAGES, MAX_FILE_SIZES.ORIGINAL_IMAGE);
+                if (!imgCheck.valid) {
+                    return NextResponse.json({ message: `Image ${img.name}: ${imgCheck.error}` }, { status: 400 });
+                }
+
+                const url = await uploadFile(img, "submissions/images");
+                uploadedImages.push({
+                    url: url,
+                    filename: img.name,
+                    mimetype: img.type,
+                    size: img.size,
+                    uploaded_at: new Date(),
+                });
+            }
+
+            newPost.original_images = uploadedImages;
+        }
+
+        // 6. Save to DB
+        const post = await Post.create(newPost);
+
+        // 7. Update User Stats (Optional but recommended)
+        // await Profiles.findByIdAndUpdate(profile._id, { $inc: { posts_count: 1 } });
+
+        return NextResponse.json(
+            {
+                message: "Post submitted successfully",
+                post: { id: post._id, status: post.status },
+            },
+            { status: 201 }
+        );
+    } catch (error) {
+        console.error("[ERROR] Create post failed:", error);
+        return NextResponse.json({ message: "Internal server error" }, { status: 500 });
+    }
+}

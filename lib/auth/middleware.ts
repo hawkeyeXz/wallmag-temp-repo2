@@ -43,8 +43,12 @@ export async function authenticateRequest(): Promise<AuthResult> {
         if (decoded.jti) {
             const blacklisted = await redis.exists(`token:blacklist:${decoded.jti}`);
             if (blacklisted) {
-                cookieStore.delete("session_token");
-                return { authenticated: false, error: "Token revoked" };
+                // CHECK GRACE PERIOD
+                const inGrace = await redis.exists(`token:grace:${decoded.jti}`);
+                if (!inGrace) {
+                    cookieStore.delete("session_token");
+                    return { authenticated: false, error: "Token revoked" };
+                }
             }
         }
 

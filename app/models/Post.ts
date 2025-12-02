@@ -1,4 +1,3 @@
-// app/models/Post.ts
 import mongoose, { Document, Schema, models } from "mongoose";
 
 export interface IPost extends Document {
@@ -13,11 +12,11 @@ export interface IPost extends Document {
     // Submission Stage
     submission_type: "upload" | "paste" | "image_upload";
 
-    // Original File (if uploaded - .docx, .pdf, .txt)
+    // Original File (DOCX/PDF) - Stored in Vercel Blob
     original_file?: {
-        file_id: mongoose.Types.ObjectId; // GridFS reference
+        url: string; // Blob URL
         filename: string;
-        mimetype: string; // application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, text/plain
+        mimetype: string;
         size: number;
         uploaded_at: Date;
     };
@@ -25,53 +24,53 @@ export interface IPost extends Document {
     // Raw Content (if pasted)
     raw_content?: string;
 
-    // Original Image Upload (if category is artwork and user uploads image directly)
+    // Original Images (Artwork) - Stored in Vercel Blob
     original_images?: Array<{
-        file_id: mongoose.Types.ObjectId; // GridFS reference
+        url: string; // Blob URL
         filename: string;
-        mimetype: string; // image/jpeg, image/png, image/jpg
+        mimetype: string;
         size: number;
         uploaded_at: Date;
     }>;
 
     // Editorial Workflow
     status:
-        | "PENDING_REVIEW" // Student submitted, waiting for editor
-        | "ACCEPTED" // Editor accepted, ready for design
-        | "REJECTED" // Editor rejected
-        | "DESIGNING" // Editor is designing
-        | "AWAITING_ADMIN" // Design uploaded, admin needs to review
-        | "ADMIN_REJECTED" // Admin rejected design (back to editor)
-        | "APPROVED" // Admin approved
-        | "PUBLISHED"; // Live on website
+        | "PENDING_REVIEW"
+        | "ACCEPTED"
+        | "REJECTED"
+        | "DESIGNING"
+        | "AWAITING_ADMIN"
+        | "ADMIN_REJECTED"
+        | "APPROVED"
+        | "PUBLISHED";
 
     // Review Info
-    reviewed_by?: mongoose.Types.ObjectId; // Editor who reviewed
+    reviewed_by?: mongoose.Types.ObjectId;
     reviewed_at?: Date;
     rejection_reason?: string;
 
-    // Designed Files (uploaded by editor as images after designing)
+    // Designed Files (Final Versions) - Stored in Vercel Blob
     designed_files: Array<{
-        file_id: mongoose.Types.ObjectId; // GridFS - images only (.jpg, .png)
+        url: string; // Blob URL
         filename: string;
-        mimetype: string; // image/jpeg, image/png
+        mimetype: string;
         size: number;
         uploaded_by: mongoose.Types.ObjectId;
         uploaded_at: Date;
-        version: number; // In case editor re-uploads
-        is_current: boolean; // Only one version is active
+        version: number;
+        is_current: boolean;
     }>;
 
     // Publishing
     published_at?: Date;
-    published_by?: mongoose.Types.ObjectId; // Admin or Publisher
-    featured_until?: Date; // For featured posts
-    excerpt?: string; // Auto-generated or manual summary
+    published_by?: mongoose.Types.ObjectId;
+    featured_until?: Date;
+    excerpt?: string;
 
-    // Engagement (only after published)
-    likes: mongoose.Types.ObjectId[]; // User IDs who liked
+    // Engagement
+    likes: mongoose.Types.ObjectId[];
     views: number;
-    comments_count: number; // Will implement comments later
+    comments_count: number;
 
     // Metadata
     created_at: Date;
@@ -99,15 +98,15 @@ const PostSchema = new Schema<IPost>(
             required: true,
         },
 
-        // Original Document Upload (.docx, .pdf, .txt)
+        // Original Document Upload
         original_file: {
-            file_id: { type: Schema.Types.ObjectId },
+            url: { type: String }, // Changed from file_id to url
             filename: { type: String },
             mimetype: {
                 type: String,
                 enum: [
                     "application/pdf",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     "text/plain",
                 ],
             },
@@ -116,16 +115,16 @@ const PostSchema = new Schema<IPost>(
         },
 
         // Pasted Text
-        raw_content: { type: String, maxlength: 50000 }, // 50KB limit for pasted text
+        raw_content: { type: String, maxlength: 50000 },
 
-        // Original Image Upload (for artwork category)
+        // Original Image Upload
         original_images: [
             {
-                file_id: { type: Schema.Types.ObjectId, required: true },
+                url: { type: String, required: true }, // Changed from file_id to url
                 filename: { type: String, required: true },
                 mimetype: {
                     type: String,
-                    enum: ["image/jpeg", "image/png", "image/jpg"],
+                    enum: ["image/jpeg", "image/png", "image/jpg", "image/webp"],
                     required: true,
                 },
                 size: { type: Number, required: true },
@@ -153,22 +152,21 @@ const PostSchema = new Schema<IPost>(
         reviewed_at: { type: Date },
         rejection_reason: { type: String, maxlength: 1000 },
 
-        // Designed Files (by editor - images OR documents)
+        // Designed Files
         designed_files: [
             {
-                file_id: { type: Schema.Types.ObjectId, required: true },
+                url: { type: String, required: true }, // Changed from file_id to url
                 filename: { type: String, required: true },
                 mimetype: {
                     type: String,
                     enum: [
-                        // Images
                         "image/jpeg",
                         "image/png",
                         "image/jpg",
-                        // Documents
+                        "image/webp",
                         "application/pdf",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-                        "application/vnd.oasis.opendocument.text", // .odt
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.oasis.opendocument.text",
                     ],
                     required: true,
                 },
@@ -196,14 +194,13 @@ const PostSchema = new Schema<IPost>(
     }
 );
 
-// Indexes for performance
-PostSchema.index({ status: 1, created_at: -1 }); // Editor/admin queues
-PostSchema.index({ author: 1, created_at: -1 }); // User's posts
-PostSchema.index({ status: 1, category: 1 }); // Public filtering
-PostSchema.index({ published_at: -1 }, { sparse: true }); // Latest published
-PostSchema.index({ tags: 1 }); // Tag search
+// Indexes
+PostSchema.index({ status: 1, created_at: -1 });
+PostSchema.index({ author: 1, created_at: -1 });
+PostSchema.index({ status: 1, category: 1 });
+PostSchema.index({ published_at: -1 }, { sparse: true });
 
-// Auto-generate excerpt if not provided
+// Auto-generate excerpt
 PostSchema.pre("save", function (next) {
     if (!this.excerpt && this.raw_content) {
         this.excerpt = this.raw_content.slice(0, 200).trim() + (this.raw_content.length > 200 ? "..." : "");
