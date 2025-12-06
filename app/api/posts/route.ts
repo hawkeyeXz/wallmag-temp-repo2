@@ -10,6 +10,18 @@ import {
 } from "@/lib/security/validators";
 import { NextResponse } from "next/server";
 
+// FIX #12: API Request Size Limits
+export const config = {
+    api: {
+        bodyParser: {
+            sizeLimit: "4mb",
+        },
+    },
+};
+
+// FIX #4: Whitelist allowed categories to prevent injection
+const ALLOWED_CATEGORIES = ["tech", "science", "art", "news", "literature", "sports"];
+
 // GET - Public Feed & Filtering
 export async function GET(req: Request) {
     try {
@@ -31,22 +43,28 @@ export async function GET(req: Request) {
         const limitNum = parseInt(limit || "10");
         const skip = (pageNum - 1) * limitNum;
 
-        // Build Query
         const query: any = { status: "PUBLISHED" };
 
+        // FIX #4: MongoDB Injection Prevention (Whitelist Check)
         if (category && category !== "all") {
-            query.category = category;
+            if (ALLOWED_CATEGORIES.includes(category)) {
+                query.category = category;
+            } else {
+                // Return empty result for invalid category without hitting DB
+                return NextResponse.json({ items: [], total: 0, page: 1, pageSize: limitNum, totalPages: 0 });
+            }
         }
 
         if (q) {
+            // Escape regex characters to prevent ReDoS
+            const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             query.$or = [
-                { title: { $regex: q, $options: "i" } },
-                { excerpt: { $regex: q, $options: "i" } },
-                { author_name: { $regex: q, $options: "i" } },
+                { title: { $regex: safeQ, $options: "i" } },
+                { excerpt: { $regex: safeQ, $options: "i" } },
+                { author_name: { $regex: safeQ, $options: "i" } },
             ];
         }
 
-        // Execute Query
         const posts = await Post.find(query)
             .sort({ published_at: -1, created_at: -1 })
             .skip(skip)
@@ -56,8 +74,6 @@ export async function GET(req: Request) {
 
         const total = await Post.countDocuments(query);
 
-        // Map for frontend consistency
-        // Explicitly cast 'posts' to any[] to avoid TS errors
         const items = (posts as any[]).map((post: any) => {
             return {
                 id: post._id,
@@ -78,7 +94,7 @@ export async function GET(req: Request) {
             totalPages: Math.ceil(total / limitNum),
         });
     } catch (error) {
-        console.error("[ERROR] Get posts failed:", error);
+        console.error("[ERROR] Get posts failed");
         return NextResponse.json({ message: "Failed to fetch posts" }, { status: 500 });
     }
 }
@@ -100,17 +116,21 @@ export async function POST(req: Request) {
         const rawContent = formData.get("raw_content") as string;
 
         // 3. Validation
+
+        // FIX #4: Validate Category against Whitelist
+        if (category && !ALLOWED_CATEGORIES.includes(category)) {
+            return NextResponse.json({ message: "Invalid category selected" }, { status: 400 });
+        }
+
         const titleCheck = validatePostTitle(title);
         if (!titleCheck.valid) return NextResponse.json({ message: titleCheck.error }, { status: 400 });
 
-        // Ensure sanitized title is a string (fallback to original or empty string if undefined)
         const sanitizedTitle = titleCheck.sanitized || title || "";
 
         // --- UNIQUE TITLE CHECK (PER AUTHOR) ---
-        // Check if THIS author already has a post with THIS title
         const existingPost = await Post.findOne({
             title: { $regex: new RegExp(`^${sanitizedTitle}$`, "i") },
-            author: profile._id, // Scoped to current user
+            author: profile._id,
         });
 
         if (existingPost) {
@@ -119,7 +139,6 @@ export async function POST(req: Request) {
                 { status: 409 }
             );
         }
-        // ---------------------------------------
 
         const typeCheck = validateSubmissionType(submissionType);
         if (!typeCheck.valid) return NextResponse.json({ message: typeCheck.error }, { status: 400 });
@@ -162,7 +181,8 @@ export async function POST(req: Request) {
             const file = formData.get("file") as File;
             if (!file) return NextResponse.json({ message: "File is required for upload type" }, { status: 400 });
 
-            const fileCheck = validateFile(file, FILE_TYPES.DOCUMENTS, MAX_FILE_SIZES.ORIGINAL_DOCUMENT);
+            // This now includes the Magic Number check from lib/blob.ts (if updated)
+            const fileCheck = await validateFile(file, FILE_TYPES.DOCUMENTS, MAX_FILE_SIZES.ORIGINAL_DOCUMENT);
             if (!fileCheck.valid) return NextResponse.json({ message: fileCheck.error }, { status: 400 });
 
             const url = await uploadFile(file, "submissions/docs");
@@ -181,7 +201,7 @@ export async function POST(req: Request) {
             }
 
             const img = images[0];
-            const imgCheck = validateFile(img, FILE_TYPES.IMAGES, MAX_FILE_SIZES.ORIGINAL_IMAGE);
+            const imgCheck = await validateFile(img, FILE_TYPES.IMAGES, MAX_FILE_SIZES.ORIGINAL_IMAGE);
             if (!imgCheck.valid) {
                 return NextResponse.json({ message: `Image ${img.name}: ${imgCheck.error}` }, { status: 400 });
             }
@@ -198,15 +218,9 @@ export async function POST(req: Request) {
         }
 
         // 6. Save to DB
-        const post = await Post.create(newPost);
+        await Post.create(newPost);
 
-        return NextResponse.json(
-            {
-                message: "Post submitted successfully",
-                // post: { id: post._id, status: post.status },
-            },
-            { status: 201 }
-        );
+        return NextResponse.json({ message: "Post submitted successfully" }, { status: 201 });
     } catch (error) {
         console.error("[ERROR] Create post failed:", error);
         return NextResponse.json({ message: "Internal server error" }, { status: 500 });

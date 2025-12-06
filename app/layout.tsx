@@ -21,11 +21,6 @@ export const metadata: Metadata = {
     title: "Apodartho: eWall Magazine of Physics, College Surendranath College",
     description:
         "Apodartho is the yearly e-wall magazine from the Department of Physics, College Srendranath College — showcasing articles, poems, artwork, and news.",
-    viewport: "width=device-width, initial-scale=1",
-    icons: {
-        icon: "/icon-light-32x32.png",
-        apple: "/apple-icon.png",
-    },
 };
 
 export const viewport: Viewport = {

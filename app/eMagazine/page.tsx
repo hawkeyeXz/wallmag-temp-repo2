@@ -2,10 +2,7 @@ import PDFViewerWrapper from "@/components/PDFViewerWrapper";
 
 export default async function PublicDocPage() {
     const doc = {
-        finalPdfUrl: `/api/emagazine?url=${encodeURIComponent(
-            process.env.EMAGAZINE_BLOB_URL ||
-                "https://e4xpii843ilwjk9n.public.blob.vercel-storage.com/Complete%20API%20Documentation-GiHgfIIEVVXv54SqJmbSdT573Xz952.pdf"
-        )}`,
+        finalPdfUrl: process.env.EMAGAZINE_BLOB_URL as string,
         title: "Apodartho Annual Edition 2024",
     };
 

@@ -57,7 +57,7 @@ export async function POST(req: Request) {
         try {
             body = await req.json();
         } catch (parseError) {
-            console.error("[v0] JSON parse error - timestamp:", new Date().toISOString());
+            console.error("[SECURITY] JSON parse error from IP:", getClientIp(req));
             return NextResponse.json({ message: "Invalid request format" }, { status: 400 });
         }
 
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: "Invalid request" }, { status: 400 });
         }
 
-        // Additional validation: sanitize ID number (adjust regex to your format)
+        // Additional validation: sanitize ID number
         const sanitizedId = id_number.trim();
         if (!/^[A-Za-z0-9-]{5,50}$/.test(sanitizedId)) {
             return NextResponse.json({ message: "Invalid request" }, { status: 400 });
@@ -76,12 +76,15 @@ export async function POST(req: Request) {
 
         const ip = getClientIp(req);
 
-        const byIp = await incrAttempts(`signup:ip:${ip}`, 60, 3600);
+        // FIX #7: Stricter Rate Limiting
+        // Limit per IP: 30 requests per hour
+        const byIp = await incrAttempts(`signup:ip:${ip}`, 30, 3600);
         if (byIp.blocked) {
             return NextResponse.json({ message: "Too many requests. Please try again later" }, { status: 429 });
         }
 
-        const byId = await incrAttempts(`signup:id:${sanitizedId}`, 60, 3600); //Todo: adjust limit as needed, limit to 5-6 per hour
+        // Limit per ID: 10 requests per hour
+        const byId = await incrAttempts(`signup:id:${sanitizedId}`, 10, 3600);
         if (byId.blocked) {
             return NextResponse.json({ message: "Too many attempts. Please try again later" }, { status: 429 });
         }
@@ -92,10 +95,11 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: "Request in progress. Please try again later" }, { status: 429 });
         }
 
-        // FIX #3: Prevent user enumeration with constant-time response
+        // FIX #3: Prevent user enumeration with constant-time response strategy
         const cached = await getCachedRegistered(sanitizedId);
         let regUser = null;
         let userProfile = null;
+
         if (cached) {
             regUser = await RegisteredUsers.findOne({ id_number: sanitizedId });
             userProfile = await Profiles.findOne({ id_number: sanitizedId });
@@ -107,10 +111,11 @@ export async function POST(req: Request) {
             }
         }
 
-        // Generic error message to prevent enumeration
+        // If user is invalid or already registered, delay response to match successful processing time
+        // This prevents attackers from guessing valid IDs based on response speed
         if (!regUser || regUser.is_signed_up || userProfile) {
-            // Add artificial delay to prevent timing attacks
-            await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 100));
+            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 200));
+            // Generic error message
             return NextResponse.json({ message: "Invalid request or user already registered" }, { status: 400 });
         }
 
@@ -123,20 +128,15 @@ export async function POST(req: Request) {
         const resendKey = `otp:resend:${sanitizedId}`;
         const resendCount = await redis.incr(resendKey);
         if (resendCount === 1) await redis.expire(resendKey, 24 * 3600);
-        if (resendCount > 100) {
-            // limit to 5-10 per day as appropriate
+
+        // Limit to 10 OTPs per day
+        if (resendCount > 10) {
             return NextResponse.json({ message: "Too many OTP requests. Try again tomorrow" }, { status: 429 });
         }
 
-        // FIX #5: REMOVE console.log of OTP - NEVER LOG SENSITIVE DATA
-        // Only log non-sensitive event information
-        console.log(
-            `[SECURITY] OTP generation requested for ID: ${sanitizedId.substring(
-                0,
-                3
-            )}*** at ${new Date().toISOString()}`
-        );
-        console.log(`[DEBUG] Generated OTP (for testing only): ${otpCode}`);
+        // FIX #23: REMOVE SENSITIVE DATA LOGGING
+        console.log(`[SECURITY] OTP generation requested for ID: ***${sanitizedId.slice(-4)}`);
+        // console.log(`[DEBUG] OTP: ${otpCode}`); // REMOVED FOR PRODUCTION
 
         const msg = {
             to: regUser.email,
@@ -159,12 +159,12 @@ export async function POST(req: Request) {
   `,
         };
 
-        // FIX #6: Enable email sending (remove try-catch that swallows errors silently)
         try {
-            // await sgMail.send(msg);
-            console.log(`[INFO] OTP email sent successfully to ${regUser.email}`);
+            // FIX #6: Ensure email sending logic is active and guarded
+            await sgMail.send(msg);
+            console.log(`[INFO] OTP email sent successfully`);
         } catch (emailError) {
-            console.error("[ERROR] Failed to send OTP email:", emailError);
+            console.error("[ERROR] Failed to send OTP email");
             // Clean up generated OTP if email fails
             await redis.del(`otp:${sanitizedId}`);
             return NextResponse.json(
@@ -173,7 +173,7 @@ export async function POST(req: Request) {
             );
         }
 
-        // FIX #7: Add more entropy to JWT and validate JWT_SECRET exists
+        // FIX #3: JWT Secret Validation (Critical)
         if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
             console.error("[CRITICAL] JWT_SECRET is missing or too weak");
             return NextResponse.json({ message: "Server configuration error" }, { status: 500 });
@@ -183,7 +183,6 @@ export async function POST(req: Request) {
             {
                 id_number: sanitizedId,
                 type: "otp_verification",
-                // Add jti (JWT ID) for token tracking/revocation if needed
                 jti: crypto.randomUUID(),
             },
             process.env.JWT_SECRET!,
@@ -195,16 +194,20 @@ export async function POST(req: Request) {
 
         await redis.set(`otp:csrf:${sanitizedId}`, csrfToken, { EX: 300 });
 
-        // FIX #8: Set secure cookie attributes based on environment
         const isProduction = process.env.NODE_ENV === "production";
 
+        // FIX #6: Secure CSRF Implementation
+        // 1. Store CSRF token in HttpOnly cookie (cannot be read by JS)
         cookieStore.set("otp_csrf_token", csrfToken, {
-            httpOnly: false,
-            secure: isProduction, // Only require HTTPS in production
+            httpOnly: true, // Critical: Prevent XSS theft
+            secure: isProduction,
             sameSite: "strict",
             path: "/",
             maxAge: 5 * 60,
         });
+
+        // 2. Send token value in body so client can send it back in header
+        // This implements the "Double Submit" or "Synchronized Token" pattern safely
 
         cookieStore.set("signup_token", token, {
             httpOnly: true,
@@ -214,18 +217,17 @@ export async function POST(req: Request) {
             maxAge: 10 * 60,
         });
 
-        // FIX #9: Don't send JWT token in response body (it's in httpOnly cookie)
         return NextResponse.json(
             {
                 message: "Verification code sent successfully",
-                // Only return non-sensitive confirmation data
-                expiresIn: 300, // seconds
+                expiresIn: 300,
+                // Client must include this in 'X-CSRF-Token' header for subsequent requests
+                csrfToken: csrfToken,
             },
             { status: 200 }
         );
     } catch (error) {
-        // FIX #10: Don't expose internal error details
-        console.error("[ERROR] Signup error:", error);
+        console.error("[ERROR] Signup error"); // No details logged
         return NextResponse.json({ message: "An error occurred. Please try again later" }, { status: 500 });
     }
 }
